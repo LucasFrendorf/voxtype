@@ -913,29 +913,30 @@ pub async fn run_setup(
             );
         }
         let verification = model::verify_cohere_gguf_model(&path, model);
-        if verification.is_ok() {
-            if !quiet {
-                print_success(&format!(
-                    "Model ready: {} ({:.2} GB)",
-                    name,
-                    model.size as f64 / 1e9
-                ));
+        match &verification {
+            Ok(()) => {
+                if !quiet {
+                    print_success(&format!(
+                        "Model ready: {} ({:.2} GB)",
+                        name,
+                        model.size as f64 / 1e9
+                    ));
+                }
             }
-        } else if download {
-            model::download_cohere_gguf_model(name)?;
-        } else if path.exists() {
-            left_damaged = true;
-            if !quiet {
-                print_failure(&format!(
-                    "Model '{}' failed verification: {}",
-                    name,
-                    verification.as_ref().unwrap_err()
-                ));
-                println!("       Run: voxtype setup --download --model {}", name);
+            Err(_) if download => model::download_cohere_gguf_model(name)?,
+            Err(e) if path.exists() => {
+                left_damaged = true;
+                if !quiet {
+                    print_failure(&format!("Model '{}' failed verification: {}", name, e));
+                    println!("       Run: voxtype setup --download --model {}", name);
+                }
             }
-        } else if !quiet {
-            print_info(&format!("Model '{}' not downloaded yet", name));
-            println!("       Run: voxtype setup --download --model {}", name);
+            Err(_) => {
+                if !quiet {
+                    print_info(&format!("Model '{}' not downloaded yet", name));
+                    println!("       Run: voxtype setup --download --model {}", name);
+                }
+            }
         }
         if activate && (verification.is_ok() || download) {
             model::set_engine_model_config("cohere", model.name)?;
