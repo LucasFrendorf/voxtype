@@ -329,18 +329,17 @@ Expanding distribution support is a current focus:
 
 Existing packages: Arch (AUR: `voxtype`, `voxtype-bin`), Debian (.deb), Fedora (.rpm)
 
-Packaging status, verified 2026-09-02 against the live repos (stable release is 1.0.1):
+Packaging status, verified 2026-10-15 against the live repos (stable release is 1.1.1):
 
 | Channel | Version | State |
 |---------|---------|-------|
-| AUR `voxtype-bin` | 1.0.1-1 | current |
-| AUR `voxtype` (source) | 1.0.1-1 | current |
-| Omarchy `edge` (`pkgs.omarchy.org/edge`) | 1.0.0-2 | one patch behind |
-| Omarchy `edge` `voxtype-bin-debug` | 1.0.0-2 | one patch behind |
+| AUR `voxtype-bin` | 1.1.1-1 | current |
+| AUR `voxtype` (source) | 1.1.1-1 | current |
+| Omarchy `stable` and `edge` (`pkgs.omarchy.org`) | `voxtype-bin` 1.1.0-2 | one patch behind |
 
-The earlier note here claimed both AUR `voxtype` and Omarchy `edge` were stranded on 0.7.5-1. Both have since moved; the only remaining gap is that `edge` is one patch release behind stable. Check the repo rather than a local sync db when judging this - a `pacman -Sl omarchy` against a stale db reported 0.7.5-1 when the repo itself had 1.0.0-2.
+Since omarchy#14625 (2026-10-08), fresh Omarchy installs default to Superwhisper, and Voxtype is a selectable dictation backend. The Omarchy repos still carry `voxtype-bin` for existing users and anyone who picks it. Check the repo database rather than a local sync db when judging versions: a stale `pacman -Sl omarchy` has reported a release that was months old.
 
-`voxtype-bin-rc` does **not** exist on AUR (the RPC returns no result for it), despite the "Two AUR channels" section below describing it as a shipping package. Either publish it or drop that section.
+`voxtype-bin-rc` does **not** exist on AUR yet (the RPC returns no result for it), despite the "Two AUR channels" section below describing it. Either publish it or drop that section.
 
 ### Feature Roadmap
 
@@ -379,7 +378,7 @@ Three things to settle before 1.2.0 ships, none of them code in the pipeline its
 
 Changing the template therefore affects new installs only and cannot break an upgrade. That is the safe way to ship cleanup on by default. Decide the full list, not just cleanup: which of the cleanup flags, VAD, and the other nice-to-haves should a new user get without touching a config file.
 
-**2. Omarchy migration PRs.** Decide what to submit upstream. Turning text cleanup on by default there needs a discussion first - it changes what users' dictation produces. Turning on the bells and whistles that should already be running is not controversial and should go regardless. Note the packaging status recorded above: Omarchy `edge` is at 1.0.0-2, one patch behind stable.
+**2. Omarchy migration PRs.** Decide what to submit upstream. Turning text cleanup on by default there needs a discussion first - it changes what users' dictation produces. Turning on the bells and whistles that should already be running is not controversial and should go regardless. Voxtype is no longer the Omarchy default (see the packaging status above), so any default change there is now a pitch to win the default back, not a migration.
 
 **3. Basic and advanced configuration.** The Quickshell config panel exposes every knob there is, and the TUI has the same problem: both are shaped by the config schema rather than by what a new user needs. Want a basic mode by default with an advanced mode that reveals everything.
 
