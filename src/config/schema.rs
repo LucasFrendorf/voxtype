@@ -1269,6 +1269,15 @@ pub const CONFIG_KEYS: &[KeySpec] = &[
         "Post a notification when voice activity detection finds no speech and the recording is discarded.",
     ),
     spec(
+        "output.notification.show_edits",
+        "output.notification",
+        "show_edits",
+        KeyType::Bool,
+        "Notifications",
+        "Show cleanup edits",
+        "When cleanup or post-processing changed the text, show the edits as a word diff in the transcription notification instead of a plain preview.",
+    ),
+    spec(
         "output.notification.show_engine_icon",
         "output.notification",
         "show_engine_icon",
@@ -2688,6 +2697,7 @@ pub fn resolve(key: &str, cfg: &Config) -> Option<Json> {
         }
         "output.notification.on_transcription" => json!(cfg.output.notification.on_transcription),
         "output.notification.on_no_speech" => json!(cfg.output.notification.on_no_speech),
+        "output.notification.show_edits" => json!(cfg.output.notification.show_edits),
         "output.notification.show_engine_icon" => json!(cfg.output.notification.show_engine_icon),
 
         "osd.enabled" => json!(cfg.osd.enabled),

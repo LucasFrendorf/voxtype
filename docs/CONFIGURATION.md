@@ -2557,6 +2557,19 @@ When `true`, shows a notification when voice activity detection finds no speech 
 
 If you see this notification while you were speaking, your microphone level is probably too low. Raise the input volume, or lower `[vad] threshold`.
 
+### show_edits
+
+**Type:** Boolean
+**Default:** `true`
+**Required:** No
+
+When `[text]` cleanup or `[output.post_process]` changed the transcription, the transcription notification shows what changed: deletions struck through and replacements highlighted, with an "✎ N edits" title. Set it to `false` to get the plain text preview instead. An LLM `post_process` command that rewrites whole sentences produces a long diff, and this is the switch for that.
+
+```toml
+[output.notification]
+show_edits = false
+```
+
 ### urgency
 
 **Type:** String (`"low"`, `"normal"`, or `"critical"`)
