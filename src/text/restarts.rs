@@ -229,7 +229,20 @@ fn find_editing_phrase(text: &str, toks: &[Tok]) -> Option<(usize, usize)> {
                 .last()
                 .unwrap_or(0);
             cut_to += consumed;
-            return Some((toks[clause_start].start, cut_to));
+            // "Scratch that." is a sentence of its own. Its full stop goes
+            // with it, or deleting the clause before it leaves ". We ...".
+            let rest = &text[cut_to..];
+            if rest.starts_with(['.', '!', '?']) {
+                cut_to += 1;
+                cut_to += text[cut_to..].len() - text[cut_to..].trim_start().len();
+            }
+            // A retraction that opens the text takes the leading whitespace
+            // with it, so the next sentence starts the output.
+            let mut from = toks[clause_start].start;
+            if text[..from].trim().is_empty() {
+                from = 0;
+            }
+            return Some((from, cut_to));
         }
     }
     None
@@ -439,6 +452,33 @@ mod tests {
                 "It runs after the model. I'm sorry, it runs before the output driver."
             ),
             "It runs before the output driver."
+        );
+    }
+
+    #[test]
+    fn a_retracted_opening_sentence_leaves_no_leading_space_or_stop() {
+        // "Scratch that." ends in its own full stop; deleting the opening
+        // sentence must not leave ". We" or " We" at the start of the text.
+        assert_eq!(
+            collapse_restarts(
+                "I think we should ship it on Tuesday. Scratch that. We should ship it on Wednesday."
+            ),
+            "We should ship it on Wednesday."
+        );
+        // Same, with the leading space Whisper puts on its output.
+        assert_eq!(
+            collapse_restarts(" Ship it Tuesday. Scratch that. Ship it Wednesday."),
+            "Ship it Wednesday."
+        );
+    }
+
+    #[test]
+    fn a_retraction_mid_text_keeps_one_space_between_sentences() {
+        assert_eq!(
+            collapse_restarts(
+                "The plan is ready. We ship on Tuesday. Scratch that. We ship on Wednesday."
+            ),
+            "The plan is ready. We ship on Wednesday."
         );
     }
 
