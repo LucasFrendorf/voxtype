@@ -52,6 +52,7 @@
 
 use crate::config::CohereConfig;
 use crate::error::TranscribeError;
+use crate::transcribe::cohere_chunking::CohereChunking;
 use crate::transcribe::cohere_fbank::CohereFbank;
 use crate::transcribe::Transcriber;
 use ort::session::Session;
@@ -103,14 +104,6 @@ const SUPPORTED_LANGUAGES: &[&str] = &[
     "ar", "de", "el", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "vi", "zh",
 ];
 
-/// The model's declared clip window and the overlap it expects between
-/// consecutive windows, from `max_audio_clip_s` and `overlap_chunk_second`
-/// in the checkpoint's processor_config.json. Like N_LAYERS and N_MELS
-/// above, these describe the graph we ship against rather than anything
-/// tunable.
-const MAX_AUDIO_CLIP_S: f32 = 35.0;
-const OVERLAP_S: f32 = 5.0;
-
 const MAX_TOKENS_PER_SECOND: f32 = 8.0;
 const ABSOLUTE_MAX_TOKENS: usize = 1024;
 
@@ -141,13 +134,16 @@ pub struct CohereTranscriber {
     /// matching empty caches and we can extract the encoder output
     /// against the right primitive.
     float_dtype: TensorElementType,
+    chunking: CohereChunking,
 }
 
 impl CohereTranscriber {
     pub fn new(config: &CohereConfig) -> Result<Self, TranscribeError> {
         let model_dir = resolve_model_path(&config.model)?;
         let threads = config.threads.unwrap_or_else(|| num_cpus::get().min(4));
-        Self::with_threads_and_lang(&model_dir, threads, &config.language)
+        let mut transcriber = Self::with_threads_and_lang(&model_dir, threads, &config.language)?;
+        transcriber.chunking = CohereChunking::new(config)?;
+        Ok(transcriber)
     }
 
     pub fn from_dir(model_dir: &Path) -> Result<Self, TranscribeError> {
@@ -260,6 +256,7 @@ impl CohereTranscriber {
             fbank: CohereFbank::new(),
             prefix,
             float_dtype,
+            chunking: CohereChunking::new(&CohereConfig::default())?,
         })
     }
 
@@ -532,48 +529,14 @@ fn check_logits_shape(shape: &[i64]) -> Result<(), TranscribeError> {
     Ok(())
 }
 
-impl CohereTranscriber {
-    /// Transcribe audio of any length by bounding what reaches the encoder.
-    ///
-    /// The checkpoint declares a 35-second clip window. We were handing it
-    /// the whole recording in one fbank extraction and one encoder pass
-    /// regardless (#551). Past the window the model degenerates — the
-    /// opening of a 150-second take went missing and the tail repeated — and
-    /// peak RSS reached 3.56 GB because the attention activations scale with
-    /// the frame count we chose to give it.
-    ///
-    /// Audio that fits the window takes exactly the path it always did, so
-    /// short dictation, which is nearly all dictation, is unchanged.
-    fn transcribe_windowed(&self, samples: &[f32]) -> Result<String, TranscribeError> {
-        let window = (MAX_AUDIO_CLIP_S * SAMPLE_RATE as f32) as usize;
-        if samples.len() <= window {
-            return self.transcribe_samples(samples);
-        }
-
-        let overlap = (OVERLAP_S * SAMPLE_RATE as f32) as usize;
-        let spans = crate::transcribe::window::windows(samples.len(), window, overlap);
-        let count = spans.len();
-        tracing::info!(
-            "Cohere: {:.1}s exceeds the model's {:.0}s window; transcribing in \
-             {} overlapping passes",
-            samples.len() as f32 / SAMPLE_RATE as f32,
-            MAX_AUDIO_CLIP_S,
-            count
-        );
-
-        let mut merged = String::new();
-        for (start, end) in spans {
-            let text = self.transcribe_samples(&samples[start..end])?;
-            merged = crate::transcribe::window::merge_overlapping(&merged, &text);
-        }
-        Ok(merged)
-    }
-}
+impl CohereTranscriber {}
 
 impl Transcriber for CohereTranscriber {
     fn transcribe(&self, samples: &[f32]) -> Result<String, TranscribeError> {
         let start = std::time::Instant::now();
-        let text = self.transcribe_windowed(samples)?;
+        let text = self
+            .chunking
+            .transcribe(samples, |chunk| self.transcribe_samples(chunk))?;
         tracing::info!(
             "Cohere transcription completed in {:.2}s: {:?}",
             start.elapsed().as_secs_f32(),
