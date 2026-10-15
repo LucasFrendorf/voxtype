@@ -281,9 +281,20 @@ impl TextProcessor {
             return text.to_string();
         };
 
-        // Replace each filler with a single space so the input
-        // "um, hello" becomes " , hello" and we can fold whitespace below.
-        let mut result = re.replace_all(text, " ").into_owned();
+        // Mark each filler, remembering whether Whisper capitalized it: a
+        // capitalized filler usually started a sentence, and its capital
+        // belongs to the word that now starts it.
+        let marked = re.replace_all(text, |caps: &regex::Captures| {
+            if caps[0].starts_with(char::is_uppercase) {
+                FILLER_UPPER.to_string()
+            } else {
+                FILLER_LOWER.to_string()
+            }
+        });
+
+        // Then splice out each run of fillers ("um", "uh, um,") by looking
+        // at the punctuation on either side of it as a whole.
+        let mut result = remove_filler_runs(&marked);
 
         // Collapse "<space><punct>" to "<punct>" so " , hello" -> ", hello".
         result = self.filler_punct_re.replace_all(&result, "$1").into_owned();
@@ -325,6 +336,159 @@ impl TextProcessor {
         }
 
         result
+    }
+}
+
+/// Stand-ins for a removed filler while its surroundings are cleaned up.
+/// Private-use code points, so they cannot collide with transcribed text.
+const FILLER_UPPER: char = '\u{E000}';
+const FILLER_LOWER: char = '\u{E001}';
+
+fn is_filler_mark(c: char) -> bool {
+    c == FILLER_UPPER || c == FILLER_LOWER
+}
+
+fn is_connector(c: char) -> bool {
+    matches!(c, ',' | ';' | ':')
+}
+
+fn is_terminator(c: char) -> bool {
+    matches!(c, '.' | '!' | '?')
+}
+
+/// True when `left` ends a sentence, allowing a closing quote or bracket
+/// after the terminator: `month.` or `"Done!"`.
+fn ends_sentence(left: &str) -> bool {
+    let trimmed = left.trim_end_matches(['"', '\'', ')', ']', '\u{201D}', '\u{2019}']);
+    trimmed.ends_with(is_terminator)
+}
+
+/// The text of the current sentence before a filler run: everything after
+/// the last sentence terminator in `left`.
+fn sentence_before(left: &str) -> &str {
+    match left.rfind(is_terminator) {
+        Some(i) => &left[i + 1..],
+        None => left,
+    }
+}
+
+/// The text of the current sentence after a filler run, up to and
+/// including its terminator.
+fn sentence_after(right: &str) -> &str {
+    match right.find(is_terminator) {
+        Some(i) => &right[..i],
+        None => right,
+    }
+}
+
+/// Remove every run of filler marks from `marked`, fixing the punctuation
+/// each run leaves behind.
+///
+/// A run is one or more fillers separated only by spaces and connectors
+/// (`um`, `uh, um,`). What happens to the punctuation depends on both sides:
+///
+/// - Sentence start: connectors after the run go, and a capitalized filler
+///   hands its capital to the next word (`month. Um, starting` becomes
+///   `month. Starting`).
+/// - Before a terminator: the connector before the run goes
+///   (`world, uh.` becomes `world.`).
+/// - Between two commas mid-sentence: Whisper bracketed the hesitation
+///   with them, so both go (`is, um, more` becomes `is more`). They stay as
+///   one when they did real work: after a lone introductory word
+///   (`Well, um, I think`) or in a sentence that has other commas, which
+///   is usually a list (`eggs, um, milk, and bread`).
+/// - A single connector on one side stays (`hello um, world` keeps its
+///   comma).
+fn remove_filler_runs(marked: &str) -> String {
+    let chars: Vec<char> = marked.chars().collect();
+    let mut out = String::with_capacity(marked.len());
+    let mut i = 0;
+
+    while i < chars.len() {
+        if !is_filler_mark(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+
+        // Extend the run across further fillers joined by spaces/connectors.
+        let capitalize = chars[i] == FILLER_UPPER;
+        let mut end = i + 1;
+        let mut scan = end;
+        while scan < chars.len() {
+            if is_filler_mark(chars[scan]) {
+                end = scan + 1;
+            } else if !(chars[scan].is_whitespace() || is_connector(chars[scan])) {
+                break;
+            }
+            scan += 1;
+        }
+
+        // Punctuation on the right: connectors, then whitespace.
+        let mut right_start = end;
+        let mut right_connector = None;
+        while right_start < chars.len()
+            && (chars[right_start].is_whitespace() || is_connector(chars[right_start]))
+        {
+            if is_connector(chars[right_start]) && right_connector.is_none() {
+                right_connector = Some(chars[right_start]);
+            }
+            right_start += 1;
+        }
+        let right: String = chars[right_start..].iter().collect();
+
+        // Punctuation on the left, already emitted into `out`.
+        let left_trimmed_len = out.trim_end().len();
+        out.truncate(left_trimmed_len);
+        let left_connector = out.chars().last().filter(|c| is_connector(*c));
+
+        let at_text_start = out.is_empty();
+        let at_sentence_start = at_text_start || ends_sentence(&out);
+        let at_text_end = right.trim().is_empty();
+        let before_terminator = right.starts_with(is_terminator);
+
+        if at_sentence_start {
+            // Nothing to keep: drop right connectors, maybe capitalize.
+        } else if at_text_end || before_terminator {
+            if left_connector.is_some() {
+                out.pop();
+            }
+        } else if let Some(lc) = left_connector {
+            if right_connector.is_some() {
+                let before = sentence_before(&out[..out.len() - lc.len_utf8()]).trim();
+                let lone_intro_word = !before.is_empty() && !before.contains(char::is_whitespace);
+                let other_commas = before.contains(',') || sentence_after(&right).contains(',');
+                if !(lone_intro_word || other_commas) {
+                    out.pop();
+                }
+            }
+        } else if let Some(rc) = right_connector {
+            out.push(rc);
+        }
+
+        if !out.is_empty() && !before_terminator && !at_text_end {
+            out.push(' ');
+        }
+
+        let mut rest = right.chars();
+        if capitalize && at_sentence_start {
+            if let Some(first) = rest.next() {
+                out.extend(first.to_uppercase());
+            }
+        }
+        out.extend(rest);
+        return finish_filler_runs(out);
+    }
+
+    out
+}
+
+/// Continue removing filler runs after the first one has been handled.
+fn finish_filler_runs(text: String) -> String {
+    if text.contains(is_filler_mark) {
+        remove_filler_runs(&text)
+    } else {
+        text
     }
 }
 
@@ -808,9 +972,90 @@ mod tests {
         let config = make_filler_config(true, None);
         let processor = TextProcessor::new(&config);
 
-        assert_eq!(processor.process("UM hello"), "hello");
-        assert_eq!(processor.process("Um hello"), "hello");
+        // A capitalized filler started the sentence, so the next word now does.
+        assert_eq!(processor.process("UM hello"), "Hello");
+        assert_eq!(processor.process("Um hello"), "Hello");
         assert_eq!(processor.process("Hmm I see"), "I see");
+    }
+
+    /// The punctuation a removed filler leaves behind, from real Whisper
+    /// output (Kokoro clips through small.en) plus the edges around it.
+    #[test]
+    fn test_filler_removal_leaves_clean_punctuation() {
+        let config = make_filler_config(true, None);
+        let processor = TextProcessor::new(&config);
+
+        let cases = [
+            // A sentence-initial filler after a full stop used to leave ".,"
+            // and a lowercase sentence.
+            (
+                "It costs $25 a month. Um, starting at 3:30 p.m. on Friday.",
+                "It costs $25 a month. Starting at 3:30 p.m. on Friday.",
+            ),
+            // Commas Whisper put around a mid-sentence hesitation both go.
+            (
+                "One of the things we need is, um, more testing.",
+                "One of the things we need is more testing.",
+            ),
+            // Start and end of the text.
+            ("Um, so we ship it.", "So we ship it."),
+            ("We ship it, uh", "We ship it"),
+            ("We ship it, uh.", "We ship it."),
+            // Before a question mark.
+            ("Can you send it, um?", "Can you send it?"),
+            ("Is it ready um?", "Is it ready?"),
+            // Chains of fillers.
+            ("Uh, um, we should ship.", "We should ship."),
+            ("It is, uh, um, done.", "It is done."),
+            ("Done. Uh, um, next item.", "Done. Next item."),
+            // Commas that did real work stay as one.
+            ("Well, um, I think so.", "Well, I think so."),
+            (
+                "We need eggs, um, milk, and bread.",
+                "We need eggs, milk, and bread.",
+            ),
+            // A lowercase filler mid-sentence changes no capitals.
+            ("we should um ship it", "we should ship it"),
+            ("Done. um next item.", "Done. next item."),
+            // Closing quote before the sentence start.
+            (
+                "He said \"done.\" Um, then left.",
+                "He said \"done.\" Then left.",
+            ),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(processor.process(input), expected, "input: {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_filler_removal_without_fillers_changes_nothing() {
+        let config = make_filler_config(true, None);
+        let processor = TextProcessor::new(&config);
+
+        for text in [
+            "It costs $25 a month. Starting at 3:30 p.m. on Friday.",
+            "Use e.g., this one. Then, that one!",
+            "Well, I think so.",
+            "summer, umbrella; erase: done.",
+        ] {
+            assert_eq!(processor.process(text), text);
+        }
+    }
+
+    #[test]
+    fn test_filler_removal_with_custom_non_english_fillers() {
+        let config = make_filler_config(true, Some(vec!["euh", "bah"]));
+        let processor = TextProcessor::new(&config);
+
+        assert_eq!(
+            processor.process("C'est prêt. Euh, on livre demain."),
+            "C'est prêt. On livre demain."
+        );
+        assert_eq!(
+            processor.process("Il faut, bah, plus de tests."),
+            "Il faut plus de tests."
+        );
     }
 
     #[test]
