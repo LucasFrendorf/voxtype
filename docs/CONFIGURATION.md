@@ -3172,7 +3172,7 @@ Converts dictated quantities into written form - inverse text normalization.
 
 That also means it does less than you might expect on engines that already normalize numbers themselves. Parakeet, for example, emits "22 open issues" as digits without help, so there is nothing left to convert.
 
-Requires a build with the `itn` Cargo feature.
+Every release build includes it. If you build voxtype yourself with `--no-default-features`, add `--features itn` back; a build without it ignores `format_numbers` and logs a warning at startup.
 
 **Example:**
 

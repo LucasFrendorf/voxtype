@@ -173,7 +173,7 @@ nix = { version = "0.29", features = ["signal", "process"] }  # Unix signals for
 zbus = { version = "4", default-features = false, features = ["tokio"] }
 
 [features]
-default = []
+default = ["itn"]
 # OSD frontends. Each binary is gated on its own feature so users can
 # build only the rendering stack they need. Real GUI deps land in
 # Commits 4a/4b; the lists below grow then.
@@ -207,10 +207,12 @@ parakeet-migraphx = ["parakeet", "parakeet-rs/migraphx"]
 parakeet-coreml = ["parakeet", "parakeet-rs/coreml"]
 # Dynamic loading for system ONNX Runtime (used by Nix builds)
 parakeet-load-dynamic = ["parakeet", "parakeet-rs/load-dynamic"]
-# Shared ONNX dependencies for engines using fbank/CTC preprocessing
 # Inverse text normalization for dictated numbers, dates, currency and URLs.
+# On by default: pure Rust, no native deps, so every release build ships it
+# and `[text] format_numbers` works without a custom build.
 itn = ["dep:text-processing-rs"]
 
+# Shared ONNX dependencies for engines using fbank/CTC preprocessing
 onnx-common = ["dep:ort", "dep:ndarray", "dep:rustfft"]
 # Marker features that aggregate per-engine GPU EP flags. Each engine's
 # session builder calls a shared helper (src/transcribe/onnx_ep.rs) that
